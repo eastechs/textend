@@ -1397,3 +1397,28 @@ on the receiver. Fixture files and the detailed session log remain in the ignore
   first pass without additional code changes.
 - Launch verification does not establish live ChatGPT, sleep/wake, reboot/login,
   or two-Mac sync acceptance. Those checks remain pending.
+
+## Textend 0.3.2 publication (2026-10-31)
+
+- Published version 0.3.2, build 11, from source
+  `1f8812ca1b62e28c0fe167cf21624a033f7e5e7b`, including the keyboard and iCloud
+  fixes in `6447b51`. Both Debug and Release version defaults match this release.
+- Acceptance includes 152 Swift tests, 16 offline release guards, nine provisioning
+  checks, strict Swift formatting, and clean review-loop checks. The website's
+  type checks, lint, formatting, and production build also pass; its release-note
+  body matches the app's notes and its generated pages show the new version first.
+- Built a universal arm64/x86_64 Release app with the existing production identity,
+  CloudKit entitlements, and Sparkle key. Apple accepted notarization submission
+  `47a79599-105c-4c51-963f-76a37a3634ff`; stapling, signature validation, and
+  Gatekeeper assessment succeeded before publication.
+- Published `https://cdn.usetextend.com/macos/Textend-0.3.2-11.zip` (12,866,068 bytes)
+  before advertising it in the signed appcast. Independent public downloads of
+  both files returned HTTP 200 and matched the prepared hashes:
+  archive `be712d881b3901c8788652a3835c9741a4d7700fdd561e8090ed58d22ba16d5b`,
+  feed `fc0763aa3c7cae43d43ce945aecec919f0a65a8ff319ebd0cfc476cf42620d15`.
+- Pushed annotated tag `v0.3.2`; its remote peeled target matches the manifest's
+  source revision above. The tag annotation records the version, build, and archive
+  hash. The website release information was committed and pushed as `d037b42`.
+- The installed production app was not replaced. A real Sparkle installation,
+  reproduction of the reported incidents, and two-Mac sync acceptance remain
+  unverified in this release run.
