@@ -3,10 +3,8 @@ import OSLog
 enum ExpansionDiagnostics {
   private static let logger = Logger(subsystem: BuildIdentity.bundleID, category: "Expansion")
 
-  /// Development diagnostics contain only fixed reasons and process IDs, never input text.
+  /// Persist fixed reasons and process IDs in release builds too, never input text.
   static func record(_ reason: String, processID: Int32) {
-    #if DEBUG
-      logger.info("\(reason, privacy: .public); pid=\(processID)")
-    #endif
+    logger.notice("\(reason, privacy: .public); pid=\(processID)")
   }
 }

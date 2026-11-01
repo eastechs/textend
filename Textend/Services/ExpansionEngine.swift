@@ -3,6 +3,8 @@ import ApplicationServices
 import Observation
 
 @MainActor @Observable final class ExpansionEngine {
+  private static let maximumInputAge: TimeInterval = 0.5
+
   enum Status: String {
     case paused = "Paused"
     case permission = "Permission required"
@@ -28,9 +30,10 @@ import Observation
   private var indexedBundleID: String?
   private(set) var paletteIsOpen = false
   private var tracking = ExpansionTracking()
-  private let focus = FocusService()
+  private let focus: FocusService
   @ObservationIgnored private lazy var insertion = TextInsertionService(
-    focus: focus, cursorFailure: { [weak self] message in self?.lastMessage = message })
+    focus: focus, secureInput: secureInput, postEvent: postEvent,
+    cursorFailure: { [weak self] message in self?.lastMessage = message })
   private var eventTap: (any ExpansionEventTap)?
   private var timer: Timer?
   private var healthTimer: Timer?
@@ -41,11 +44,17 @@ import Observation
   private let postEventAccess: @MainActor () -> Bool
   private let secureInput: @MainActor () -> Bool
   private let supportsInputSource: @MainActor () -> Bool
+  private let application: @MainActor () -> FocusService.Application?
+  private let enqueueInput: @MainActor (@escaping @MainActor () -> Void) -> Void
+  private let uptime: @MainActor () -> TimeInterval
+  private let postEvent: @MainActor (CGEvent) -> Void
   private let makeEventTap:
     @MainActor (@escaping @MainActor (CGEventType, CGEvent) -> Void) -> (any ExpansionEventTap)?
   private var isStarted = false
   private var isSleeping = false
   private var isSessionActive = true
+  private var inputGeneration: UInt64 = 0
+  private var inputSequence: UInt64 = 0
 
   init(
     preferences: UserDefaults = .standard,
@@ -56,6 +65,17 @@ import Observation
     supportsInputSource: @escaping @MainActor () -> Bool = {
       FocusService.supportsCurrentInputSource
     },
+    focus: FocusService? = nil,
+    application: @escaping @MainActor () -> FocusService.Application? = {
+      NSWorkspace.shared.frontmostApplication.map {
+        FocusService.Application(processID: $0.processIdentifier, bundleID: $0.bundleIdentifier)
+      }
+    },
+    enqueueInput: @escaping @MainActor (@escaping @MainActor () -> Void) -> Void = { work in
+      DispatchQueue.main.async { work() }
+    },
+    uptime: @escaping @MainActor () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+    postEvent: @escaping @MainActor (CGEvent) -> Void = { $0.post(tap: .cgSessionEventTap) },
     makeEventTap:
       @escaping @MainActor (@escaping @MainActor (CGEventType, CGEvent) -> Void) -> (
         any ExpansionEventTap
@@ -67,6 +87,11 @@ import Observation
     self.postEventAccess = postEventAccess
     self.secureInput = secureInput
     self.supportsInputSource = supportsInputSource
+    self.focus = focus ?? FocusService()
+    self.application = application
+    self.enqueueInput = enqueueInput
+    self.uptime = uptime
+    self.postEvent = postEvent
     self.makeEventTap = makeEventTap
     isEnabled = preferences.bool(forKey: "expansionEnabled")
     excludedBundleIDs = preferences.stringArray(forKey: "excludedBundleIDs") ?? []
@@ -134,7 +159,7 @@ import Observation
 
   private func rebuildIndex() {
     cancel()
-    indexedBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+    indexedBundleID = application()?.bundleID
     tracking.matcher.update(library.automaticItems(in: indexedBundleID))
   }
 
@@ -145,8 +170,8 @@ import Observation
 
   func captureInsertionTarget() -> FocusService.Snapshot? {
     guard accessibility(), postEventAccess(), !secureInput(), !insertion.isBusy,
-      let app = NSWorkspace.shared.frontmostApplication,
-      !excludedBundleIDs.contains(app.bundleIdentifier ?? "")
+      let app = application(),
+      !excludedBundleIDs.contains(app.bundleID ?? "")
     else { return nil }
     return focus.capture()
   }
@@ -277,6 +302,10 @@ import Observation
 
   private func receive(type: CGEventType, event: CGEvent) {
     if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+      ExpansionDiagnostics.record(
+        type == .tapDisabledByTimeout
+          ? "Keyboard listener timed out" : "Keyboard listener disabled",
+        processID: 0)
       cancel()
       eventTap?.enable()
       return
@@ -302,20 +331,13 @@ import Observation
       !event.flags.contains(.maskCommand), !event.flags.contains(.maskControl),
       !event.flags.contains(.maskAlternate),
       event.getIntegerValueField(.keyboardEventAutorepeat) == 0 || code == 51,
-      let app = NSWorkspace.shared.frontmostApplication,
-      !excludedBundleIDs.contains(app.bundleIdentifier ?? ""),
-      let current = focus.currentTarget()
+      let app = application(),
+      !excludedBundleIDs.contains(app.bundleID ?? "")
     else {
       cancel()
       return
     }
-    if indexedBundleID != app.bundleIdentifier { rebuildIndex() }
-    if code == 51 {
-      timer?.invalidate()
-      timer = nil
-      tracking.backspace(target: current, selection: focus.selectionRange())
-      return
-    }
+    if indexedBundleID != app.bundleID { rebuildIndex() }
     guard ![36, 48, 53, 76, 115, 116, 117, 119, 121, 123, 124, 125, 126].contains(code) else {
       cancel()
       return
@@ -324,44 +346,90 @@ import Observation
     var length = 0
     event.keyboardGetUnicodeString(
       maxStringLength: 16, actualStringLength: &length, unicodeString: &characters)
-    guard length > 0 else {
+    guard length > 0 || code == 51 else {
       cancel()
       return
     }
     let text = String(utf16CodeUnits: characters, count: length)
+    inputSequence &+= 1
+    let sequence = inputSequence
+    let generation = inputGeneration
+    let receivedAt =
+      event.timestamp == 0 ? uptime() : min(uptime(), Double(event.timestamp) / 1_000_000_000)
+    // An active event tap holds the host's key until its callback returns.
+    // Never ask that host to answer synchronous accessibility queries here.
+    enqueueInput { [weak self] in
+      guard let self, self.inputGeneration == generation else { return }
+      guard self.uptime() - receivedAt <= Self.maximumInputAge,
+        self.application()?.processID == app.processID
+      else {
+        self.cancel()
+        ExpansionDiagnostics.record("Discarded delayed input", processID: app.processID)
+        return
+      }
+      self.processInput(
+        text, code: code, processID: app.processID, sequence: sequence,
+        generation: generation, receivedAt: receivedAt)
+    }
+  }
+
+  private func processInput(
+    _ text: String, code: Int64, processID: Int32, sequence: UInt64,
+    generation: UInt64, receivedAt: TimeInterval
+  ) {
+    guard status == .active, !paletteIsOpen, !insertion.isBusy, !secureInput(),
+      let current = focus.currentTarget(), current.processID == processID
+    else {
+      cancel()
+      return
+    }
     let selection = focus.selectionRange()
+    // AX messaging can run a nested event loop. A pause, app switch, or wake
+    // during a read must not let this older input recreate a cancelled run.
+    guard generation == inputGeneration else { return }
+    guard uptime() - receivedAt <= Self.maximumInputAge, application()?.processID == processID
+    else {
+      cancel()
+      return
+    }
+    if code == 51 {
+      timer?.invalidate()
+      timer = nil
+      tracking.backspace(target: current, selection: selection)
+      return
+    }
     let starting = tracking.target != current
-    let boundary = starting ? focus.startsAtBoundary() : nil
     if starting {
-      ExpansionDiagnostics.record(
-        boundary == false ? "Typing run begins inside a word" : "Typing run begins at a boundary",
-        processID: current.processID)
+      ExpansionDiagnostics.record("Typing run started", processID: current.processID)
     }
     timer?.invalidate()
     guard
       let match = tracking.input(
         text, target: current, selection: selection,
-        startsAtBoundary: boundary, now: ProcessInfo.processInfo.systemUptime)
+        startsAtBoundary: nil, now: uptime())
     else { return }
     ExpansionDiagnostics.record("Keyword matched", processID: current.processID)
     if let deadline = match.deadline {
       timer = Timer.scheduledTimer(
-        withTimeInterval: max(0, deadline - ProcessInfo.processInfo.systemUptime), repeats: false
+        withTimeInterval: max(0, deadline - uptime()), repeats: false
       ) { [weak self] _ in
         MainActor.assumeIsolated {
-          self?.expand(match, target: current)
+          self?.expand(match, target: current, sequence: sequence)
         }
       }
     } else {
-      // Return the physical event first so it reaches the host before our backspaces.
+      // Give the editor time to publish its selection after receiving the final key.
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { [weak self] in
-        self?.expand(match, target: current)
+        self?.expand(match, target: current, sequence: sequence)
       }
     }
   }
 
-  private func expand(_ match: TriggerMatch, target: ExpansionTarget, attempt: Int = 0) {
-    guard !paletteIsOpen, status == .active, !secureInput(),
+  private func expand(
+    _ match: TriggerMatch, target: ExpansionTarget, sequence: UInt64, attempt: Int = 0
+  ) {
+    let generation = inputGeneration
+    guard sequence == inputSequence, !paletteIsOpen, status == .active, !secureInput(),
       accessibility(), postEventAccess(), focus.currentTarget() == target,
       match.generation == tracking.matcher.generation
     else { return }
@@ -384,7 +452,7 @@ import Observation
     case .waiting:
       if attempt < 14 {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { [weak self] in
-          self?.expand(match, target: target, attempt: attempt + 1)
+          self?.expand(match, target: target, sequence: sequence, attempt: attempt + 1)
         }
       } else {
         ExpansionDiagnostics.record(
@@ -394,7 +462,17 @@ import Observation
       return
     case .ready: break
     }
-    guard let snippet = tracking.matcher.take(match, now: ProcessInfo.processInfo.systemUptime)
+    // Reads now happen after delivery, so test the character before the whole
+    // confirmed keyword, not the character before the first key's new caret.
+    if matchingKeyword == true,
+      focus.startsAtBoundary(beforeUTF16Count: match.snippet.keyword.utf16.count) == false
+    {
+      ExpansionDiagnostics.record("Keyword is inside a word", processID: target.processID)
+      cancel()
+      return
+    }
+    guard sequence == inputSequence, generation == inputGeneration,
+      let snippet = tracking.matcher.take(match, now: uptime())
     else {
       return
     }
@@ -403,17 +481,19 @@ import Observation
       let result = try library.resolve(
         snippet, clipboard: library.needsClipboard(snippet) ? insertion.readText() : nil)
       guard focus.currentTarget() == target,
-        library.allows(snippet, in: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+        library.allows(snippet, in: application()?.bundleID)
       else { return }
       try insertion.replace(
         keyword: snippet.keyword, with: result.text, target: target,
-        cursorUTF16Offset: result.cursorUTF16Offset)
+        cursorUTF16Offset: result.cursorUTF16Offset,
+        validate: { self.inputSequence == sequence && self.inputGeneration == generation })
       ExpansionDiagnostics.record("Expansion events posted", processID: target.processID)
       lastMessage = nil
     } catch { lastMessage = error.localizedDescription }
   }
 
   private func cancel() {
+    inputGeneration &+= 1
     insertion.cancelCursorPlacement()
     timer?.invalidate()
     timer = nil

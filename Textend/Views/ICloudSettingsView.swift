@@ -11,13 +11,13 @@ struct ICloudSettingsView: View {
         Toggle(
           "Sync snippets with iCloud",
           isOn: Binding(
-            get: { sync.isActive },
+            get: { sync.isEnabledForCurrentAccount },
             set: {
               proposedEnabled = $0
               showingConfirmation = true
             })
         )
-        .disabled(!sync.isActive && !sync.canEnable)
+        .disabled(sync.requiresRestart || (!sync.isEnabledForCurrentAccount && !sync.canEnable))
         LabeledContent("Account", value: sync.accountDescription)
         LabeledContent("Activity", value: sync.activity)
         if let last = sync.lastTransfer {
@@ -36,8 +36,8 @@ struct ICloudSettingsView: View {
         if let message = sync.message {
           Text(message).foregroundStyle(.secondary).textSelection(.enabled)
         }
-        if sync.requiresRestart {
-          Button("Restart Textend…") { sync.requestChange(false) }
+        if sync.requiresRestart || sync.canResumeAfterRestart {
+          Button("Restart Textend…") { sync.requestChange(sync.configuration.enabled) }
             .disabled(sync.recoveryFailed)
         } else {
           Button("Check iCloud Account") { Task { await sync.checkAccount() } }

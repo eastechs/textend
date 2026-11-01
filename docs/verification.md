@@ -1315,3 +1315,85 @@ on the receiver. Fixture files and the detailed session log remain in the ignore
   source revision above. The tag annotation records version, build, and archive hash.
 - The installed app was not replaced. A real Sparkle update to this version has
   not been verified in this release run.
+
+## Keyboard callback delays after sleep (2026-10-30)
+
+- Dave reported that keywords failed in ChatGPT after sleep and after restarting
+  Textend, then worked in Notes and subsequently in ChatGPT. The installed app is
+  0.3.1 (10). Inspection after recovery showed expansion active and Secure Input
+  disabled. The event tap reported substantial latency, but the sampled process
+  was idle. The original failure was not reproduced, and release builds had no
+  expansion diagnostics to establish its exact cause.
+- Found synchronous accessibility queries inside the active keyboard-tap callback.
+  Editor inspection now runs after that callback returns, so those queries do not
+  hold the current keystroke. The initial word boundary is checked before the full
+  confirmed keyword because the editor can already have consumed the typed keys.
+- Input older than half a second is discarded using the event timestamp, with
+  callback time as the fallback for events without a timestamp. App changes,
+  lifecycle recovery, pause, palette changes, and library updates invalidate
+  queued input. New physical input invalidates pending replacement immediately,
+  including when it arrives during accessibility reads or insertion preparation.
+- Release builds now retain the existing fixed-reason expansion diagnostics,
+  including listener disable/timeout events. Logs contain no typed text, keywords,
+  snippet contents, clipboard contents, or document text.
+- Reviewed the existing native pipeline, Apple's event-tap/AX API contracts, and
+  [Espanso's macOS detection implementation](https://github.com/espanso/espanso/blob/dev/espanso-detect/src/mac/native.mm).
+  Reused Textend's event-tap, insertion, and logging infrastructure without adding
+  dependencies or changing permissions.
+- Added 14 regression tests. All 83 focused input, focus, lifecycle, tracking,
+  matching, insertion, and transaction tests pass. Strict Swift formatting,
+  whitespace checks, and the provisioned macOS development build pass. Xcode
+  reports an unrelated installed CoreSimulator version mismatch; the macOS build
+  succeeds without simulator support.
+- Review-loop reached a clean fourth pass. Earlier passes reproduced and fixed
+  two accessibility reentrancy races and extended stale-event rejection to cover
+  delays before the callback itself, and corrected a test-closure compiler error.
+  Reviewed cancellation, clipboard restoration,
+  generated-event filtering, logging privacy, and sibling service/test conventions.
+- No installed-app replacement, app relaunch, commit, push, or release was made.
+  Live ChatGPT and physical sleep/wake acceptance remain pending.
+
+## iCloud preference and account-status correction (2026-10-31)
+
+- Dave reported iCloud sync appearing to turn itself off, including after a Mac
+  restart, with an unexpected restart message. Read-only inspection found the
+  production configuration still enabled. No production preferences or libraries
+  were edited during this investigation.
+- Found two direct causes: Settings bound the switch to the current store's
+  mirroring state instead of the saved choice, and every `CKAccountChanged`
+  notification immediately invoked recovery, persisted sync as disabled, and
+  selected a new local library before verifying the account. Apple's
+  [notification contract](https://developer.apple.com/documentation/foundation/nsnotification/name-swift.struct/ckaccountchanged)
+  covers status changes and instructs the app to query account status.
+- Notifications now recheck the account. Same-account and temporary-unavailability
+  results retain the enabled preference and existing library. Restricted access
+  is no longer classified as a sign-out. Confirmed sign-outs and different
+  identities retain the existing recovery and account-isolation behavior.
+- Cancelled, stopped, or superseded checks cannot disable sync or overwrite a
+  newer verified identity. Cache fallback also requires the system identity to
+  remain stable during the lookup.
+- The switch now represents the saved choice for the current account. A local
+  startup while iCloud is unavailable keeps that choice enabled. Once the same
+  account is verified, Settings explains the startup condition and offers the
+  existing restart action without disabling the preference. Reattaching such a
+  locally opened store still requires restarting Textend.
+- Added 12 regression tests using isolated temporary libraries and simulated
+  CloudKit responses. All 21 focused provider, account, lifecycle, store, and
+  persistence-identity tests pass. Formatting, whitespace checks, and the signed
+  macOS development build pass. Review-loop completed a clean first pass over the
+  notification flow, stale requests, cache ownership, recovery boundaries, switch
+  binding, restart configuration, and sibling service/test conventions.
+- The earlier keyboard patch remains in the same local working tree. No commit,
+  push, release, installed-app replacement, or relaunch was performed. Live
+  Settings, reboot/login, and two-Mac sync checks remain pending.
+
+### Development launch and commit acceptance (2026-10-31)
+
+- Subsequently rebuilt and launched Textend Dev with both fixes using
+  `./script/build_and_run.sh --verify`; the development process was confirmed
+  running. The installed production app was not replaced.
+- The complete Swift suite passes: 152 tests, zero failures. Strict formatting and
+  whitespace checks pass. The combined pre-commit review-loop reached a clean
+  first pass without additional code changes.
+- Launch verification does not establish live ChatGPT, sleep/wake, reboot/login,
+  or two-Mac sync acceptance. Those checks remain pending.

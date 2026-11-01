@@ -16,6 +16,8 @@ import Observation
   private let directory: URL
   private let provider: any CloudAccountProviding
   private let defaults: UserDefaults
+  private let notificationCenter: NotificationCenter
+  private let workspaceCenter: NotificationCenter
   private let makeStore: @MainActor (URL, String?) throws -> LibraryStore
   private weak var store: LibraryStore?
   private var observers: [NSObjectProtocol] = []
@@ -24,10 +26,14 @@ import Observation
   private var transferError: String?
   private var refreshTask: Task<Void, Never>?
   private var storeIdentifier: String?
+  private var accountCheckGeneration: UInt64 = 0
+  private var isStopped = false
   var onRestart: ((SyncConfiguration) -> Void)?
 
   init(
     directory: URL, provider: any CloudAccountProviding, defaults: UserDefaults,
+    notificationCenter: NotificationCenter = .default,
+    workspaceCenter: NotificationCenter = NSWorkspace.shared.notificationCenter,
     makeStore: @escaping @MainActor (URL, String?) throws -> LibraryStore = {
       try LibraryStore(url: $0, cloudContainer: $1)
     }
@@ -35,6 +41,8 @@ import Observation
     self.directory = directory
     self.provider = provider
     self.defaults = defaults
+    self.notificationCenter = notificationCenter
+    self.workspaceCenter = workspaceCenter
     self.makeStore = makeStore
     configuration = try SyncConfiguration.load(in: directory)
     lastTransfer = defaults.object(forKey: "lastTransfer." + configuration.libraryName) as? Date
@@ -58,7 +66,14 @@ import Observation
     return id != owner
   }
 
+  var isEnabledForCurrentAccount: Bool { configuration.enabled && !changesAccount }
+
+  var canResumeAfterRestart: Bool {
+    !requiresRestart && !isActive && provider.isProvisioned && configuration.canSync(with: account)
+  }
+
   func openLibrary() async throws -> LibraryStore {
+    isStopped = false
     account = await provider.currentAccount()
     isActive = configuration.canSync(with: account) && provider.isProvisioned
     let url = try configuration.storeURL(in: directory)
@@ -87,7 +102,11 @@ import Observation
   }
 
   func checkAccount() async {
+    guard !isStopped else { return }
+    accountCheckGeneration &+= 1
+    let generation = accountCheckGeneration
     let current = await provider.currentAccount()
+    guard !Task.isCancelled, generation == accountCheckGeneration else { return }
     account = current
     if isActive {
       switch current {
@@ -116,10 +135,12 @@ import Observation
   func rollbackRestart() throws { try configuration.save(in: directory) }
 
   func stop() {
+    isStopped = true
+    accountCheckGeneration &+= 1
     refreshTask?.cancel()
-    for observer in observers { NotificationCenter.default.removeObserver(observer) }
+    for observer in observers { notificationCenter.removeObserver(observer) }
     for observer in workspaceObservers {
-      NSWorkspace.shared.notificationCenter.removeObserver(observer)
+      workspaceCenter.removeObserver(observer)
     }
     observers = []
     workspaceObservers = []
@@ -139,23 +160,24 @@ import Observation
         isActive
         ? transferError != nil
           ? "Waiting for iCloud" : transfers.isEmpty ? "Waiting for changes" : "Syncing"
-        : "Off"
+        : canResumeAfterRestart ? "Restart required" : "Off"
       message =
         changesAccount
         ? "This is a different iCloud account. Enabling sync opens its separate library. Your previous library stays on this Mac."
-        : configuration.enabled && !isActive
-          ? "Restart Textend to resume sync with this account."
+        : canResumeAfterRestart
+          ? "iCloud wasn’t available when Textend opened. Your sync setting is still on. Restart Textend to resume syncing."
           : transferError
     }
   }
 
   private func observe() {
-    let center = NotificationCenter.default
+    let center = notificationCenter
     observers.append(
       center.addObserver(forName: .CKAccountChanged, object: nil, queue: .main) { [weak self] _ in
         MainActor.assumeIsolated {
           guard let self else { return }
-          if self.isActive { self.suspendForAccountChange() }
+          // CloudKit also posts this when account availability changes. Only
+          // suspend after confirming a sign-out or a different account identity.
           Task { await self.checkAccount() }
         }
       })
@@ -202,7 +224,7 @@ import Observation
       })
     for name in [NSWorkspace.didWakeNotification, NSWorkspace.didActivateApplicationNotification] {
       workspaceObservers.append(
-        NSWorkspace.shared.notificationCenter.addObserver(
+        workspaceCenter.addObserver(
           forName: name,
           object: nil, queue: .main
         ) { [weak self] _ in

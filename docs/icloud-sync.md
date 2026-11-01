@@ -92,13 +92,25 @@ Save/Discard/Cancel flow. Disabling retains the downloaded local library and doe
 not delete cloud records. A different account receives a separate store after
 explicit enablement, without importing the previous account's library.
 
-An observed account change suspends the current store and expansion index,
+A confirmed sign-out or different account identity suspends the current store and expansion index,
 preserves the last observed library in a private `*.recovery.json` file, and
 requires restart. That recovery is opened locally before sync can be enabled
 again. A failed recovery write blocks the automatic restart action and asks for a
 backup. Do not remove old account stores or recovery files automatically.
 Ordinary connection failures keep local editing available while Apple's framework
 handles retries. Account unavailability alone is not treated as an account change.
+CloudKit's account notification triggers a fresh status and identity check before
+recovery is considered; the notification can also indicate temporary availability
+changes. Restricted access does not erase the saved account identity or sync choice.
+Cancelled or superseded account checks cannot change the library or cached account.
+
+The iCloud switch shows the saved choice for the current account, separately from
+the Activity status. If the account cannot be verified at startup, Textend opens
+the library locally while keeping sync enabled in its settings. When the same
+account becomes available, Settings offers Restart Textend to attach the store to
+iCloud without turning the preference off. An already attached store can wait for
+temporary outages without a restart. A confirmed different account still requires
+explicit enablement and a separate library.
 
 Public JSON backup format is version 2; version 1 imports remain supported. It is a user backup/interchange
 format, not the synchronization transport. Recovery snapshots also retain raw

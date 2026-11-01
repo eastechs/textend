@@ -53,6 +53,15 @@ import CoreGraphics
     try perform(keyword: keyword, text: text, target: target, cursorUTF16Offset: cursorUTF16Offset)
   }
 
+  func replace(
+    keyword: String, with text: String, target: ExpansionTarget, cursorUTF16Offset: Int?,
+    validate: @MainActor () -> Bool
+  ) throws {
+    try perform(
+      keyword: keyword, text: text, target: target, cursorUTF16Offset: cursorUTF16Offset,
+      validate: validate)
+  }
+
   func insert(
     _ expansion: ResolvedExpansion, target: ExpansionTarget, selection: CFRange,
     validate: @escaping @MainActor () -> Bool
@@ -71,9 +80,11 @@ import CoreGraphics
 
   private func perform(
     keyword: String, text: String, target: ExpansionTarget,
-    cursorUTF16Offset: Int?, selectedRange: CFRange? = nil
+    cursorUTF16Offset: Int?, selectedRange: CFRange? = nil,
+    validate: @MainActor () -> Bool = { true }
   ) throws {
-    guard !isBusy, focus.currentTarget() == target, !secureInput(), validManualTarget else {
+    guard !isBusy, focus.currentTarget() == target, !secureInput(), validManualTarget, validate()
+    else {
       throw TemplateError.invalid(
         "Expansion cancelled because the target changed or another expansion is finishing.")
     }
@@ -152,7 +163,7 @@ import CoreGraphics
         events += [down, up]
       }
     }
-    guard focus.currentTarget() == target, !secureInput(), validManualTarget else {
+    guard focus.currentTarget() == target, !secureInput(), validManualTarget, validate() else {
       throw TemplateError.invalid("Expansion cancelled because focus changed.")
     }
     if usesPasteboard {
@@ -176,7 +187,7 @@ import CoreGraphics
       }
       ownChangeCount = pasteboard.changeCount
     }
-    guard focus.currentTarget() == target, !secureInput(), validManualTarget else {
+    guard focus.currentTarget() == target, !secureInput(), validManualTarget, validate() else {
       restoreClipboard()
       throw TemplateError.invalid("Expansion cancelled because focus changed.")
     }

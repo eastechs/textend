@@ -40,6 +40,7 @@ import Carbon
 
   private let application: @MainActor () -> Application?
   private let attribute: @MainActor (AXUIElement, String) -> CFTypeRef?
+  private let stringForRange: @MainActor (AXUIElement, CFRange) -> String?
   private let ownBundleID: String?
   private var processID: Int32?
   private var focusedWindow: AXUIElement?
@@ -59,10 +60,22 @@ import Carbon
         return nil
       }
       return value
+    },
+    stringForRange: @escaping @MainActor (AXUIElement, CFRange) -> String? = { element, range in
+      var range = range
+      guard let parameter = AXValueCreate(.cfRange, &range) else { return nil }
+      var value: CFTypeRef?
+      guard
+        AXUIElementCopyParameterizedAttributeValue(
+          element, kAXStringForRangeParameterizedAttribute as CFString, parameter, &value)
+          == .success
+      else { return nil }
+      return value as? String
     }, ownBundleID: String? = Bundle.main.bundleIdentifier
   ) {
     self.application = application
     self.attribute = attribute
+    self.stringForRange = stringForRange
     self.ownBundleID = ownBundleID
   }
 
@@ -123,18 +136,12 @@ import Carbon
   }
 
   /// Only inspect the adjacent character and selection, never the document value.
-  func startsAtBoundary() -> Bool? {
-    guard let element = focusedElement, let range = selectionRange() else { return nil }
+  func startsAtBoundary(beforeUTF16Count length: Int = 0) -> Bool? {
+    guard let range = selectionRange(), length >= 0, range.location >= length else { return nil }
     guard range.length == 0 else { return false }
-    if range.location == 0 { return true }
-    var previousRange = CFRange(location: range.location - 1, length: 1)
-    guard let parameter = AXValueCreate(.cfRange, &previousRange) else { return nil }
-    var previous: CFTypeRef?
-    guard
-      AXUIElementCopyParameterizedAttributeValue(
-        element, kAXStringForRangeParameterizedAttribute as CFString, parameter, &previous)
-        == .success,
-      let text = previous as? String, let character = text.last
+    let start = range.location - length
+    if start == 0 { return true }
+    guard let text = text(in: CFRange(location: start - 1, length: 1)), let character = text.last
     else { return nil }
     return !character.isLetter && !character.isNumber && character != "_"
   }
@@ -164,15 +171,7 @@ import Carbon
   /// Read only the span just inserted by Textend to confirm paste consumption.
   func text(in range: CFRange) -> String? {
     guard let element = focusedElement else { return nil }
-    var range = range
-    guard let parameter = AXValueCreate(.cfRange, &range) else { return nil }
-    var value: CFTypeRef?
-    guard
-      AXUIElementCopyParameterizedAttributeValue(
-        element,
-        kAXStringForRangeParameterizedAttribute as CFString, parameter, &value) == .success
-    else { return nil }
-    return value as? String
+    return stringForRange(element, range)
   }
 
   static var supportsCurrentInputSource: Bool {

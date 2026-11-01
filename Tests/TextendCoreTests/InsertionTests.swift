@@ -4,6 +4,25 @@ import XCTest
 @testable import TextendCore
 
 final class InsertionTests: XCTestCase {
+  @MainActor func testInputDuringInsertionPreparationLeavesKeywordAndClipboardIntact() throws {
+    for invalidatedOnCheck in 1...3 {
+      let h = CursorHarness()
+      defer { h.stop() }
+      var checks = 0
+      XCTAssertThrowsError(
+        try h.service.replace(
+          keyword: "gc", with: "First line\nSecond line", target: h.target,
+          cursorUTF16Offset: nil,
+          validate: {
+            checks += 1
+            return checks < invalidatedOnCheck
+          }))
+      XCTAssertTrue(h.keys.isEmpty)
+      XCTAssertFalse(h.service.isBusy)
+      XCTAssertEqual(h.pasteboard.string(forType: .string), "Original clipboard")
+    }
+  }
+
   @MainActor func testClipboardFilesResolveToLiteralPathsAndPreserveRepresentations() throws {
     let pasteboard = NSPasteboard(name: .init(UUID().uuidString))
     defer { pasteboard.releaseGlobally() }
