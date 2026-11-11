@@ -1459,3 +1459,33 @@ on the receiver. Fixture files and the detailed session log remain in the ignore
 - `./script/check.sh` passes: 152 core tests, five native layout tests, 16 release
   guards, nine provisioning checks, strict formatting, and the signed development
   build. The pre-commit review-loop completed a clean first pass.
+
+## Textend 0.3.3 publication (2026-11-10)
+
+- Committed and pushed version 0.3.3, build 12, from source
+  `fbd71ac5113fb2747ed9bba5e8f122ce841fd69a`. The release includes the startup
+  toolbar fix and reproducible onboarding debugger script described above.
+- Full acceptance checks passed: 157 Swift tests (152 core and five layout), 16
+  offline release guards, nine provisioning checks, strict Swift formatting,
+  whitespace checks, and the signed development build.
+- Built a universal arm64/x86_64 Release app with the existing production identity,
+  CloudKit entitlements, and Sparkle signing key. Apple accepted notarization
+  submission `11002f32-0f6b-4ab8-aa96-0ea334a1d283`; stapling, signature validation,
+  and Gatekeeper assessment succeeded before publication.
+- Published `https://cdn.usetextend.com/macos/Textend-0.3.3-12.zip` (12,866,724 bytes)
+  and verified its public download before publishing the signed appcast. Public
+  artifact verification matched the prepared SHA-256 hashes:
+  archive `50f0ae2d10074c6988edb9b9d00944bca942afc9c4d2dd7aaeae6539593b3a2c`,
+  feed `f031b559a6893bf81f81dd87089c056a5f406daee674a0fa9a40038762071430`.
+- Pushed annotated tag `v0.3.3` and verified its remote target is the manifest's
+  source revision above. The annotation records the version, build, and archive
+  hash; subsequent verification-document commits do not change that tag.
+- The website download and matching release notes were committed and pushed as
+  `cd3616ec1b278c3900985f672376c935af2fec6e`. Type checks, lint, formatting, and
+  the production build pass. Inspected the built updates page at desktop and
+  390-pixel mobile widths, then verified the deployed page shows 0.3.3 as latest.
+  All three homepage download links resolve to the published build 12 archive.
+- App and website review-loop checks completed clean first passes. Local native
+  onboarding and library behavior were inspected as recorded above. The affected
+  remote Mac mini, startup of the signed release artifact, and an installed
+  Sparkle upgrade remain unverified. The installed production app was not replaced.
