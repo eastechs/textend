@@ -1,0 +1,11 @@
+# Use after building Textend Dev; quit an existing development preview first:
+# lldb -s script/debug_onboarding.lldb -- 'build/Build/Products/Debug/Textend Dev.app/Contents/MacOS/Textend Dev'
+# Show onboarding in memory without resetting preferences or enabling expansion.
+settings set -- target.run-args --sync-preview
+breakpoint set --name 'Textend.ExpansionSetup.isPresented.getter : Swift.Bool' --one-shot true
+breakpoint command add
+expression --language Swift -- self.isPresented = true
+continue
+DONE
+breakpoint set --name objc_exception_throw
+run

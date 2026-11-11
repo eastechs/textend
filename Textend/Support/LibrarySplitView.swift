@@ -14,8 +14,8 @@ struct LibrarySplitView: NSViewControllerRepresentable {
   func updateNSViewController(
     _ controller: PinnedContentController<LibrarySplitController>, context: Context
   ) {
-    controller.content.saveItem.isEnabled = canSave
-    controller.content.newItemButton.contentTintColor = accent.nsColor
+    controller.content.saveItem?.isEnabled = canSave
+    controller.content.toolbarAccent = accent.nsColor
   }
 
   func sizeThatFits(
@@ -32,8 +32,11 @@ struct LibrarySplitView: NSViewControllerRepresentable {
 
 @MainActor final class LibrarySplitController: NSSplitViewController, NSToolbarDelegate {
   private let state: AppState
-  let saveItem: SaveSnippetToolbarItem
-  let newItemButton = NSPopUpButton(frame: .zero, pullsDown: true)
+  private(set) weak var saveItem: SaveSnippetToolbarItem?
+  private weak var newItemButton: NSPopUpButton?
+  var toolbarAccent: NSColor? {
+    didSet { newItemButton?.contentTintColor = toolbarAccent }
+  }
   private var libraryToolbar: NSToolbar?
   private static let sidebarDivider = NSToolbarItem.Identifier("textend.sidebarDivider")
   private static let listDivider = NSToolbarItem.Identifier("textend.listDivider")
@@ -45,9 +48,15 @@ struct LibrarySplitView: NSViewControllerRepresentable {
 
   init(state: AppState) {
     self.state = state
-    saveItem = SaveSnippetToolbarItem(identifier: Self.saveSnippet, state: state)
     super.init(nibName: nil, bundle: nil)
+  }
+
+  required init?(coder: NSCoder) { fatalError("Use init(state:)") }
+
+  private func makeNewItemButton() -> NSPopUpButton {
+    let newItemButton = NSPopUpButton(frame: .zero, pullsDown: true)
     newItemButton.bezelStyle = .texturedRounded
+    newItemButton.contentTintColor = toolbarAccent
     newItemButton.imagePosition = .imageOnly
     newItemButton.addItem(withTitle: "New")
     newItemButton.item(at: 0)?.image = NSImage(
@@ -61,9 +70,8 @@ struct LibrarySplitView: NSViewControllerRepresentable {
     }
     newItemButton.widthAnchor.constraint(equalToConstant: 56).isActive = true
     newItemButton.setAccessibilityLabel("New Snippet or Composition")
+    return newItemButton
   }
-
-  required init?(coder: NSCoder) { fatalError("Use init(state:)") }
 
   override func viewDidLoad() {
     super.viewDidLoad()
@@ -116,6 +124,7 @@ struct LibrarySplitView: NSViewControllerRepresentable {
       toolbar.allowsUserCustomization = false
       libraryToolbar = toolbar
     }
+    guard window.toolbar !== libraryToolbar else { return }
     window.titleVisibility = .hidden
     window.toolbarStyle = .unified
     window.toolbar = libraryToolbar
@@ -163,10 +172,15 @@ struct LibrarySplitView: NSViewControllerRepresentable {
         identifier, label: "Snippet", content: SnippetHeaderView(state: state),
         minimum: 100, preferred: 260, maximum: 400)
     case Self.saveSnippet:
-      let item = saveItem
+      // AppKit can request an identifier again while loading a sheet's toolbar.
+      // Each request must get a new item, never an instance owned by a toolbar.
+      let item = SaveSnippetToolbarItem(identifier: identifier, state: state)
       item.label = "Save"
       item.toolTip = "Save (⌘S)"
-      let saveButton = NSButton(title: "Save", target: nil, action: nil)
+      // The title convenience initializer calls sizeToFit, which can reenter
+      // SwiftUI's sheet toolbar updates before AppKit finishes loading its items.
+      let saveButton = NSButton(frame: .zero)
+      saveButton.title = "Save"
       saveButton.bezelStyle = .texturedRounded
       saveButton.target = self
       saveButton.action = #selector(save)
@@ -174,13 +188,16 @@ struct LibrarySplitView: NSViewControllerRepresentable {
       item.view = saveButton
       item.visibilityPriority = .high
       item.validate()
+      if flag && toolbar === libraryToolbar { saveItem = item }
       return item
     case Self.newSnippet:
       let item = NSToolbarItem(itemIdentifier: identifier)
       item.label = "New"
       item.toolTip = "New Snippet or Composition"
-      item.view = newItemButton
+      let button = makeNewItemButton()
+      item.view = button
       item.visibilityPriority = .high
+      if flag && toolbar === libraryToolbar { newItemButton = button }
       return item
     case .toggleSidebar:
       let item = NSToolbarItem(itemIdentifier: identifier)

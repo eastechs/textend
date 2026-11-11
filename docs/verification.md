@@ -1422,3 +1422,40 @@ on the receiver. Fixture files and the detailed session log remain in the ignore
 - The installed production app was not replaced. A real Sparkle installation,
   reproduction of the reported incidents, and two-Mac sync acceptance remain
   unverified in this release run.
+
+## First-launch toolbar crash (2026-11-10)
+
+- Symbolicated the supplied 0.3.2/build 11 crash with its matching arm64 dSYM
+  (`14ED1235-2318-362C-AA4F-67C82F59D86C`). It aborts in
+  `LibrarySplitController.viewDidAppear()` while assigning the window toolbar.
+- Reproduced the same `NSToolbar _loadAllPlaceholderItems` assertion on macOS
+  27.2.1/build 26B131 by presenting onboarding at startup. The debugger showed
+  `NSButton(title:target:action:)` calling `sizeToFit`, reentering SwiftUI's
+  `BarAppearanceBridge` and loading the same toolbar placeholders a second time.
+- Save now uses `NSButton(frame:)` with explicit configuration, avoiding forced
+  layout during item construction. Each delegate request gets fresh Save/New
+  items and controls. Weak references track only the library's inserted controls,
+  and repeated appearances do not reassign an already-attached toolbar.
+- Added `script/debug_onboarding.lldb` to repeat this case in Textend Dev without
+  clearing preferences or enabling expansion. It sets onboarding in memory and
+  breaks on Objective-C exceptions; run the command documented in the script
+  after quitting any existing development preview.
+- Native inspection verified onboarding with the full toolbar, Set Up Later,
+  the New menu, an invalid draft with Save disabled, and a valid draft with Save
+  enabled. Discarded the temporary draft, quit, and verified a normal relaunch
+  using `./script/build_and_run.sh --preview`; the original two snippets remain.
+- All 11 focused layout/onboarding tests, strict Swift formatting, whitespace
+  checks, and the signed development build pass. The final review-loop completed
+  a clean first pass over the diff, control ownership, reentrancy, validation,
+  theme propagation, and sibling-controller conventions.
+- This is a local development fix. No commit, notarization, publication, or
+  replacement of the installed production app was performed. The affected Mac
+  mini and a signed release artifact still need verification after publication.
+
+### 0.3.3 release preparation
+
+- Dave authorized committing, pushing, notarizing, publishing, and updating the
+  website. Both build configurations now identify version 0.3.3, build 12.
+- `./script/check.sh` passes: 152 core tests, five native layout tests, 16 release
+  guards, nine provisioning checks, strict formatting, and the signed development
+  build. The pre-commit review-loop completed a clean first pass.
